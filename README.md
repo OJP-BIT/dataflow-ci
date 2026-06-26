@@ -23,9 +23,6 @@ Observer → detects new commit → Dispatcher → assigns job → Runner(s) →
 docker compose up --build
 ```
 
-- Dispatcher API: http://localhost:8000
-- Dashboard: run separately (see below)
-
 **Dashboard dev server:**
 ```bash
 cd dashboard
