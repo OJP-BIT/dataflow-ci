@@ -1,32 +1,48 @@
-Each component runs as an independent Docker container. The dispatcher is the only stateful service — it persists job history and runner registry to SQLite. Runners are stateless and horizontally scalable.
+# DataFlow CI
 
-## Tech Stack
+A distributed CI system for data pipelines. It watches a Git repository for new commits, validates pipeline output files against declared expectations, and surfaces results in a real-time dashboard.
 
-| Layer | Technology |
+## How it works
+
+```
+Observer → detects new commit → Dispatcher → assigns job → Runner(s) → submit results
+                                                                ↑
+                                                          Dashboard polls
+```
+
+| Service | Role |
 |---|---|
-| API | Python 3.11, FastAPI, Uvicorn |
-| Persistence | SQLAlchemy, SQLite |
-| Validation | Pandas, Pandera, NumPy, PyArrow |
-| Git integration | GitPython |
-| Containerization | Docker, Docker Compose |
-| Frontend | React, Vite, TailwindCSS, Axios |
+| **Dispatcher** | FastAPI job queue (SQLite). Manages job lifecycle, runner registration, heartbeat monitoring, and job reassignment on runner failure. |
+| **Observer** | Polls a Git repo for new commits. Dispatches a validation job for each new HEAD. |
+| **Runner** | Pulls assigned jobs, runs all three check categories, posts results back. Scales horizontally — two run by default. |
+| **Dashboard** | React SPA. Polls the dispatcher every 5s. Shows job status and per-check results. |
 
-## Quick Start
-
-**Prerequisites:** Docker Desktop, Git
+## Quick start
 
 ```bash
-git clone https://github.com/OJP-BIT/dataflow-ci.git
-cd dataflow-ci
 docker compose up --build
 ```
 
-Dashboard: `http://localhost:3000`
-API docs: `http://localhost:8000/docs`
+- Dispatcher API: http://localhost:8000
+- Dashboard: run separately (see below)
 
-## Defining Expectations
+**Dashboard dev server:**
+```bash
+cd dashboard
+npm install
+npm run dev    # http://localhost:5173
+```
 
-Add a `dataflow_expectations.yml` file to your pipeline repository:
+**Run checks locally without Docker:**
+```bash
+cd runner
+pip install -r requirements.txt
+python smoke_test.py    # runs against tests/sample_pipeline
+```
+
+## Defining expectations
+
+Place a `dataflow_expectations.yml` at the root of the watched repository. The runner validates all CSV/Parquet files in the `outputs/` directory against it.
 
 ```yaml
 orders.csv:
@@ -39,15 +55,10 @@ orders.csv:
       nullable: false
     status:
       dtype: object
-      allowed_values:
-        - pending
-        - shipped
-        - delivered
+      allowed_values: [pending, shipped, delivered, cancelled]
     quantity:
+      dtype: int
       min_value: 1
-      max_value: 10000
-      mean_min: 1.0
-      mean_max: 500.0
       check_outliers: true
       max_outlier_ratio: 0.05
 
@@ -69,20 +80,31 @@ freshness:
     max_age_hours: 48
 ```
 
-## Fault Recovery
+**Check categories:**
 
-The dispatcher runs a background heartbeat monitor checking runner liveness every 10 seconds. If a runner stops sending heartbeats for 30 seconds, it is marked dead and its in-progress job is automatically reassigned to another available runner.
+- **Structural** — column existence, dtypes, nullability, primary key uniqueness, row count bounds
+- **Statistical** — value range (`min_value`/`max_value`), mean bounds, outlier ratio, categorical `allowed_values`
+- **Referential** — foreign key integrity, join coverage ratio, output file freshness
 
-## Scaling
+## Environment variables
 
-To add more parallel runners, extend `docker-compose.yml`:
+| Variable | Service | Default | Description |
+|---|---|---|---|
+| `DISPATCHER_URL` | observer, runner | `http://localhost:8000` | Dispatcher endpoint |
+| `REPO_PATH` | observer, runner | `../tests/sample_pipeline` | Path to watched Git repo |
+| `POLL_INTERVAL` | observer | `10` | Seconds between Git polls |
+| `RUNNER_ID` | runner | `runner-1` | Unique runner identifier |
+| `HEARTBEAT_INTERVAL` | runner | `5` | Seconds between heartbeats |
 
-```yaml
-runner-3:
-  build: ./runner
-  environment:
-    - RUNNER_ID=runner-3
-    - DISPATCHER_URL=http://dispatcher:8000
-```
+## Dispatcher API
 
-## Project Structure
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Active runners and pending job count |
+| `POST` | `/dispatch` | Submit a new validation job |
+| `GET` | `/jobs` | List recent jobs |
+| `GET` | `/jobs/{job_id}` | Job detail with check results |
+| `POST` | `/runners/register` | Register a runner |
+| `POST` | `/runners/heartbeat` | Runner keep-alive |
+| `GET` | `/runners/job/{runner_id}` | Poll for an assigned job |
+| `POST` | `/jobs/result` | Submit check results |
