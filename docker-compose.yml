@@ -1,0 +1,65 @@
+version: "3.9"
+
+services:
+  dispatcher:
+    build: ./dispatcher
+    container_name: dataflow-dispatcher
+    ports:
+      - "8000:8000"
+    volumes:
+      - dispatcher-data:/app/data
+      - ./shared:/app/shared
+    environment:
+      - DATABASE_URL=sqlite:///./data/dataflow.db
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  observer:
+    build: ./observer
+    container_name: dataflow-observer
+    volumes:
+      - ./shared:/app/shared
+      - ./tests/sample_pipeline:/repo
+    environment:
+      - DISPATCHER_URL=http://dispatcher:8000
+      - POLL_INTERVAL=10
+      - REPO_PATH=/repo
+    depends_on:
+      dispatcher:
+        condition: service_healthy
+
+  runner-1:
+    build: ./runner
+    container_name: dataflow-runner-1
+    volumes:
+      - ./shared:/app/shared
+      - ./tests/sample_pipeline:/repo
+    environment:
+      - DISPATCHER_URL=http://dispatcher:8000
+      - RUNNER_ID=runner-1
+      - HEARTBEAT_INTERVAL=5
+      - REPO_PATH=/repo
+    depends_on:
+      dispatcher:
+        condition: service_healthy
+
+  runner-2:
+    build: ./runner
+    container_name: dataflow-runner-2
+    volumes:
+      - ./shared:/app/shared
+      - ./tests/sample_pipeline:/repo
+    environment:
+      - DISPATCHER_URL=http://dispatcher:8000
+      - RUNNER_ID=runner-2
+      - HEARTBEAT_INTERVAL=5
+      - REPO_PATH=/repo
+    depends_on:
+      dispatcher:
+        condition: service_healthy
+
+volumes:
+  dispatcher-data:
